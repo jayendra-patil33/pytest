@@ -2,6 +2,7 @@
 import argparse
 import collections.abc
 import copy
+import dataclasses
 import enum
 import glob
 import inspect
@@ -34,7 +35,6 @@ from typing import Type
 from typing import TYPE_CHECKING
 from typing import Union
 
-import attr
 from pluggy import HookimplMarker
 from pluggy import HookspecMarker
 from pluggy import PluginManager
@@ -697,6 +697,7 @@ class PytestPluginManager(PluginManager):
                     parg = opt[2:]
                 else:
                     continue
+                parg = parg.strip()
                 if exclude_only and not parg.startswith("no:"):
                     continue
                 self.consider_pluginarg(parg)
@@ -886,10 +887,6 @@ def _iter_rewritable_modules(package_files: Iterable[str]) -> Iterator[str]:
             yield from _iter_rewritable_modules(new_package_files)
 
 
-def _args_converter(args: Iterable[str]) -> Tuple[str, ...]:
-    return tuple(args)
-
-
 @final
 class Config:
     """Access to configuration values, pluginmanager and plugin hooks.
@@ -903,7 +900,7 @@ class Config:
     """
 
     @final
-    @attr.s(frozen=True, auto_attribs=True)
+    @dataclasses.dataclass(frozen=True)
     class InvocationParams:
         """Holds parameters passed during :func:`pytest.main`.
 
@@ -919,12 +916,23 @@ class Config:
             Plugins accessing ``InvocationParams`` must be aware of that.
         """
 
-        args: Tuple[str, ...] = attr.ib(converter=_args_converter)
+        args: Tuple[str, ...]
         """The command-line arguments as passed to :func:`pytest.main`."""
         plugins: Optional[Sequence[Union[str, _PluggyPlugin]]]
         """Extra plugins, might be `None`."""
         dir: Path
         """The directory from which :func:`pytest.main` was invoked."""
+
+        def __init__(
+            self,
+            *,
+            args: Iterable[str],
+            plugins: Optional[Sequence[Union[str, _PluggyPlugin]]],
+            dir: Path,
+        ) -> None:
+            object.__setattr__(self, "args", tuple(args))
+            object.__setattr__(self, "plugins", plugins)
+            object.__setattr__(self, "dir", dir)
 
     class ArgsSource(enum.Enum):
         """Indicates the source of the test arguments.
@@ -998,6 +1006,8 @@ class Config:
         self.hook.pytest_addoption.call_historic(
             kwargs=dict(parser=self._parser, pluginmanager=self.pluginmanager)
         )
+        self.args_source = Config.ArgsSource.ARGS
+        self.args: List[str] = []
 
         if TYPE_CHECKING:
             from _pytest.cacheprovider import Cache
@@ -1337,8 +1347,8 @@ class Config:
 
     def parse(self, args: List[str], addopts: bool = True) -> None:
         # Parse given cmdline arguments into this config object.
-        assert not hasattr(
-            self, "args"
+        assert (
+            self.args == []
         ), "can only parse cmdline args at most once per Config object"
         self.hook.pytest_addhooks.call_historic(
             kwargs=dict(pluginmanager=self.pluginmanager)
